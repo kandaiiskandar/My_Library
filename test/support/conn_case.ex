@@ -35,4 +35,30 @@ defmodule MyLibWeb.ConnCase do
     MyLib.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
+
+  @doc """
+  Setup helper that registers and logs in credentials.
+
+      setup :register_and_log_in_credential
+
+  It stores an updated connection and a registered credential in the
+  test context.
+  """
+  def register_and_log_in_credential(%{conn: conn}) do
+    credential = MyLib.CredentialsFixtures.credential_fixture()
+    %{conn: log_in_credential(conn, credential), credential: credential}
+  end
+
+  @doc """
+  Logs the given `credential` into the `conn`.
+
+  It returns an updated `conn`.
+  """
+  def log_in_credential(conn, credential) do
+    token = MyLib.Credentials.generate_credential_session_token(credential)
+
+    conn
+    |> Phoenix.ConnTest.init_test_session(%{})
+    |> Plug.Conn.put_session(:credential_token, token)
+  end
 end

@@ -1,6 +1,8 @@
 defmodule MyLibWeb.Router do
   use MyLibWeb, :router
 
+  import MyLibWeb.CredentialAuth
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -8,6 +10,7 @@ defmodule MyLibWeb.Router do
     plug :put_root_layout, html: {MyLibWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    plug :fetch_current_credential
   end
 
   pipeline :api do
@@ -15,7 +18,7 @@ defmodule MyLibWeb.Router do
   end
 
   scope "/", MyLibWeb do
-    pipe_through :browser
+    pipe_through [:browser, :require_authenticated_credential]
 
     get "/", PageController, :home
 
@@ -41,6 +44,18 @@ defmodule MyLibWeb.Router do
     live "/loans/:id/show/edit", LoanLive.Show, :edit
   end
 
+  scope "/user", MyLibWeb do
+    pipe_through [:browser, :require_authenticated_credential]
+
+    live "/loans/:id/show/edit", LoanLive.Show, :edit
+  end
+
+  scope "/admin", MyLibWeb do
+    pipe_through [:browser, :require_authenticated_credential]
+
+    live "/loans/:id/show/edit", LoanLive.Show, :edit
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", MyLibWeb do
   #   pipe_through :api
@@ -60,6 +75,44 @@ defmodule MyLibWeb.Router do
 
       live_dashboard "/dashboard", metrics: MyLibWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+    end
+  end
+
+  ## Authentication routes
+
+  scope "/", MyLibWeb do
+    pipe_through [:browser, :redirect_if_credential_is_authenticated]
+
+    live_session :redirect_if_credential_is_authenticated,
+      on_mount: [{MyLibWeb.CredentialAuth, :redirect_if_credential_is_authenticated}] do
+      live "/credentials/register", CredentialRegistrationLive, :new
+      live "/credentials/log_in", CredentialLoginLive, :new
+      live "/credentials/reset_password", CredentialForgotPasswordLive, :new
+      live "/credentials/reset_password/:token", CredentialResetPasswordLive, :edit
+    end
+
+    post "/credentials/log_in", CredentialSessionController, :create
+  end
+
+  scope "/", MyLibWeb do
+    pipe_through [:browser, :require_authenticated_credential]
+
+    live_session :require_authenticated_credential,
+      on_mount: [{MyLibWeb.CredentialAuth, :ensure_authenticated}] do
+      live "/credentials/settings", CredentialSettingsLive, :edit
+      live "/credentials/settings/confirm_email/:token", CredentialSettingsLive, :confirm_email
+    end
+  end
+
+  scope "/", MyLibWeb do
+    pipe_through [:browser]
+
+    delete "/credentials/log_out", CredentialSessionController, :delete
+
+    live_session :current_credential,
+      on_mount: [{MyLibWeb.CredentialAuth, :mount_current_credential}] do
+      live "/credentials/confirm/:token", CredentialConfirmationLive, :edit
+      live "/credentials/confirm", CredentialConfirmationInstructionsLive, :new
     end
   end
 end
