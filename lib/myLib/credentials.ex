@@ -7,6 +7,51 @@ defmodule MyLib.Credentials do
   alias MyLib.Repo
 
   alias MyLib.Credentials.{Credential, CredentialToken, CredentialNotifier}
+  alias MyLib.Credentials.CredentialProfile
+
+  def get_credential_profile(profile_id, opts \\ []) do
+    preload_opts = Keyword.get(opts, :preload, [])
+
+    CredentialProfile
+    |> preload(^preload_opts)
+    |> Repo.get_by(id: profile_id)
+  end
+
+  def get_credential(credential_id, opts \\ []) do
+    preload_opts = Keyword.get(opts, :preload, [])
+
+    Credential
+    |> preload(^preload_opts)
+    |> Repo.get_by(id: credential_id)
+  end
+
+  def create_credential_profile(credential, attrs) do
+    %CredentialProfile{}
+    |> CredentialProfile.changeset(Map.put(attrs, "credential_id", credential.id))
+    |> Repo.insert()
+  end
+
+  def update_credential_profile(%CredentialProfile{} = profile, attrs) do
+    profile
+    |> CredentialProfile.changeset(attrs)
+    |> Repo.update()
+  end
+
+  def change_credential_profile(profile \\ %CredentialProfile{}, attrs \\ %{})
+
+  def change_credential_profile(%CredentialProfile{} = profile, attrs) do
+    profile
+    |> CredentialProfile.changeset(attrs)
+  end
+
+  def change_credential_profile(nil, attrs) do
+    %CredentialProfile{}
+    |> CredentialProfile.changeset(attrs)
+  end
+
+  def get_credential_profile_by_credential_id(credential_id) do
+    Repo.get_by(CredentialProfile, credential_id: credential_id)
+  end
 
   ## Database getters
 
@@ -23,7 +68,12 @@ defmodule MyLib.Credentials do
 
   """
   def get_credential_by_email(email) when is_binary(email) do
-    Repo.get_by(Credential, email: email)
+    Credential
+    |> Repo.get_by(email: email)
+    |> case do
+      nil -> nil
+      credential -> Repo.preload(credential, :profile)
+    end
   end
 
   @doc """
@@ -40,7 +90,14 @@ defmodule MyLib.Credentials do
   """
   def get_credential_by_email_and_password(email, password)
       when is_binary(email) and is_binary(password) do
-    credential = Repo.get_by(Credential, email: email)
+    credential =
+      Credential
+      |> Repo.get_by(email: email)
+      |> case do
+        nil -> nil
+        credential -> Repo.preload(credential, :profile)
+      end
+
     if Credential.valid_password?(credential, password), do: credential
   end
 
@@ -58,7 +115,13 @@ defmodule MyLib.Credentials do
       ** (Ecto.NoResultsError)
 
   """
-  def get_credential!(id), do: Repo.get!(Credential, id)
+  def get_credential!(id, opts \\ []) do
+    preload_opts = Keyword.get(opts, :preload, [:profile])
+
+    Credential
+    |> preload(^preload_opts)
+    |> Repo.get!(id)
+  end
 
   ## Credential registration
 
@@ -90,7 +153,10 @@ defmodule MyLib.Credentials do
 
   """
   def change_credential_registration(%Credential{} = credential, attrs \\ %{}) do
-    Credential.registration_changeset(credential, attrs, hash_password: false, validate_email: false)
+    Credential.registration_changeset(credential, attrs,
+      hash_password: false,
+      validate_email: false
+    )
   end
 
   ## Settings
@@ -154,7 +220,10 @@ defmodule MyLib.Credentials do
 
     Ecto.Multi.new()
     |> Ecto.Multi.update(:credential, changeset)
-    |> Ecto.Multi.delete_all(:tokens, CredentialToken.by_credential_and_contexts_query(credential, [context]))
+    |> Ecto.Multi.delete_all(
+      :tokens,
+      CredentialToken.by_credential_and_contexts_query(credential, [context])
+    )
   end
 
   @doc ~S"""
@@ -166,12 +235,21 @@ defmodule MyLib.Credentials do
       {:ok, %{to: ..., body: ...}}
 
   """
-  def deliver_credential_update_email_instructions(%Credential{} = credential, current_email, update_email_url_fun)
+  def deliver_credential_update_email_instructions(
+        %Credential{} = credential,
+        current_email,
+        update_email_url_fun
+      )
       when is_function(update_email_url_fun, 1) do
-    {encoded_token, credential_token} = CredentialToken.build_email_token(credential, "change:#{current_email}")
+    {encoded_token, credential_token} =
+      CredentialToken.build_email_token(credential, "change:#{current_email}")
 
     Repo.insert!(credential_token)
-    CredentialNotifier.deliver_update_email_instructions(credential, update_email_url_fun.(encoded_token))
+
+    CredentialNotifier.deliver_update_email_instructions(
+      credential,
+      update_email_url_fun.(encoded_token)
+    )
   end
 
   @doc """
@@ -207,7 +285,10 @@ defmodule MyLib.Credentials do
 
     Ecto.Multi.new()
     |> Ecto.Multi.update(:credential, changeset)
-    |> Ecto.Multi.delete_all(:tokens, CredentialToken.by_credential_and_contexts_query(credential, :all))
+    |> Ecto.Multi.delete_all(
+      :tokens,
+      CredentialToken.by_credential_and_contexts_query(credential, :all)
+    )
     |> Repo.transaction()
     |> case do
       {:ok, %{credential: credential}} -> {:ok, credential}
@@ -231,7 +312,13 @@ defmodule MyLib.Credentials do
   """
   def get_credential_by_session_token(token) do
     {:ok, query} = CredentialToken.verify_session_token_query(token)
-    Repo.one(query)
+
+    query
+    |> Repo.one()
+    |> case do
+      nil -> nil
+      credential -> Repo.preload(credential, :profile)
+    end
   end
 
   @doc """
@@ -256,14 +343,21 @@ defmodule MyLib.Credentials do
       {:error, :already_confirmed}
 
   """
-  def deliver_credential_confirmation_instructions(%Credential{} = credential, confirmation_url_fun)
+  def deliver_credential_confirmation_instructions(
+        %Credential{} = credential,
+        confirmation_url_fun
+      )
       when is_function(confirmation_url_fun, 1) do
     if credential.confirmed_at do
       {:error, :already_confirmed}
     else
       {encoded_token, credential_token} = CredentialToken.build_email_token(credential, "confirm")
       Repo.insert!(credential_token)
-      CredentialNotifier.deliver_confirmation_instructions(credential, confirmation_url_fun.(encoded_token))
+
+      CredentialNotifier.deliver_confirmation_instructions(
+        credential,
+        confirmation_url_fun.(encoded_token)
+      )
     end
   end
 
@@ -276,7 +370,8 @@ defmodule MyLib.Credentials do
   def confirm_credential(token) do
     with {:ok, query} <- CredentialToken.verify_email_token_query(token, "confirm"),
          %Credential{} = credential <- Repo.one(query),
-         {:ok, %{credential: credential}} <- Repo.transaction(confirm_credential_multi(credential)) do
+         {:ok, %{credential: credential}} <-
+           Repo.transaction(confirm_credential_multi(credential)) do
       {:ok, credential}
     else
       _ -> :error
@@ -286,7 +381,10 @@ defmodule MyLib.Credentials do
   defp confirm_credential_multi(credential) do
     Ecto.Multi.new()
     |> Ecto.Multi.update(:credential, Credential.confirm_changeset(credential))
-    |> Ecto.Multi.delete_all(:tokens, CredentialToken.by_credential_and_contexts_query(credential, ["confirm"]))
+    |> Ecto.Multi.delete_all(
+      :tokens,
+      CredentialToken.by_credential_and_contexts_query(credential, ["confirm"])
+    )
   end
 
   ## Reset password
@@ -300,11 +398,20 @@ defmodule MyLib.Credentials do
       {:ok, %{to: ..., body: ...}}
 
   """
-  def deliver_credential_reset_password_instructions(%Credential{} = credential, reset_password_url_fun)
+  def deliver_credential_reset_password_instructions(
+        %Credential{} = credential,
+        reset_password_url_fun
+      )
       when is_function(reset_password_url_fun, 1) do
-    {encoded_token, credential_token} = CredentialToken.build_email_token(credential, "reset_password")
+    {encoded_token, credential_token} =
+      CredentialToken.build_email_token(credential, "reset_password")
+
     Repo.insert!(credential_token)
-    CredentialNotifier.deliver_reset_password_instructions(credential, reset_password_url_fun.(encoded_token))
+
+    CredentialNotifier.deliver_reset_password_instructions(
+      credential,
+      reset_password_url_fun.(encoded_token)
+    )
   end
 
   @doc """
@@ -322,7 +429,7 @@ defmodule MyLib.Credentials do
   def get_credential_by_reset_password_token(token) do
     with {:ok, query} <- CredentialToken.verify_email_token_query(token, "reset_password"),
          %Credential{} = credential <- Repo.one(query) do
-      credential
+      Repo.preload(credential, :profile)
     else
       _ -> nil
     end
@@ -343,7 +450,10 @@ defmodule MyLib.Credentials do
   def reset_credential_password(credential, attrs) do
     Ecto.Multi.new()
     |> Ecto.Multi.update(:credential, Credential.password_changeset(credential, attrs))
-    |> Ecto.Multi.delete_all(:tokens, CredentialToken.by_credential_and_contexts_query(credential, :all))
+    |> Ecto.Multi.delete_all(
+      :tokens,
+      CredentialToken.by_credential_and_contexts_query(credential, :all)
+    )
     |> Repo.transaction()
     |> case do
       {:ok, %{credential: credential}} -> {:ok, credential}

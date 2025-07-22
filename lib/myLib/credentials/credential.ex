@@ -2,12 +2,16 @@ defmodule MyLib.Credentials.Credential do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias MyLib.Credentials.CredentialProfile
+
   schema "credentials" do
     field :email, :string
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
     field :current_password, :string, virtual: true, redact: true
     field :confirmed_at, :utc_datetime
+
+    has_one :profile, CredentialProfile
 
     timestamps(type: :utc_datetime)
   end
